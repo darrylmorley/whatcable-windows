@@ -165,3 +165,10 @@ So treat this repo as a research tool:
 - prove which Windows machines expose the needed data
 - collect useful diagnostic reports
 - decide whether WhatCable Windows Labs is a viable project
+
+## Research Notes
+
+- [Windows USB diagnostics projects](research/windows-usb-diagnostics-projects.md):
+  useful ideas from UsbScope and midpoint/whatcable-windows, including hub
+  IOCTL speed detection, Billboard descriptors, provider aggregation, and why
+  neither project currently proves the live UCSI/e-marker path.
