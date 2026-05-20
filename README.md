@@ -95,8 +95,9 @@ only give a partial answer.
 The probe phase uses `UcsiControl.exe`, which is part of Microsoft's USB Test
 Tool package.
 
-If `UcsiControl.exe` is on your `PATH`, the checker will find it. Otherwise,
-pass the path explicitly:
+If `UcsiControl.exe` is on your `PATH`, or installed under the usual MUTT
+software package folder such as `C:\Program Files (x86)\USBTest\x64`, the
+checker will find it. Otherwise, pass the path explicitly:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\whatcable-windows-check.ps1 -Enable -UcsiControlPath "C:\path\to\UcsiControl.exe"

@@ -154,10 +154,17 @@ function Find-UcsiControl {
 
     $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
     $programFiles = [Environment]::GetEnvironmentVariable("ProgramFiles")
-    $candidateRoots = @($programFilesX86, $programFiles) |
-        Where-Object { $_ } |
-        ForEach-Object { Join-Path $_ "Windows Kits\10\Tools" } |
-        Where-Object { Test-Path -LiteralPath $_ }
+    $candidateRoots = @()
+    foreach ($basePath in @($programFilesX86, $programFiles)) {
+        if (-not $basePath) {
+            continue
+        }
+
+        $candidateRoots += Join-Path $basePath "USBTest"
+        $candidateRoots += Join-Path $basePath "Windows Kits\10\Tools"
+    }
+
+    $candidateRoots = @($candidateRoots | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique)
 
     foreach ($root in $candidateRoots) {
         $match = Get-ChildItem -LiteralPath $root -Recurse -Filter "UcsiControl.exe" -ErrorAction SilentlyContinue |
