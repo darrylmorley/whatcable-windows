@@ -80,6 +80,12 @@ To also save a diagnostic JSON file:
 powershell -ExecutionPolicy Bypass -File .\scripts\whatcable-windows-check.ps1 -Enable -JsonOut .\whatcable-windows-check.json
 ```
 
+To create a new GitHub issue with the results:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\whatcable-windows-check.ps1 -Enable -CreateIssue
+```
+
 The script can run without Administrator rights, but it cannot enable
 `TestInterfaceEnabled` or restart the UCSI device. That usually means it can
 only give a partial answer.
@@ -99,6 +105,45 @@ powershell -ExecutionPolicy Bypass -File .\scripts\whatcable-windows-check.ps1 -
 Without `UcsiControl.exe`, the checker can still verify the UCSI device and
 registry setup. It cannot prove that the PC exposes the cable data WhatCable
 needs.
+
+## Creating A GitHub Issue
+
+If you run the checker with `-CreateIssue`, it creates a new issue in:
+
+```text
+darrylmorley/whatcable-windows
+```
+
+The issue includes:
+
+- the final result
+- PC manufacturer and model
+- Windows version
+- whether the script ran as Administrator
+- the UCSI device details
+- restart details
+- a summary of each UCSI probe
+- truncated raw probe output
+
+The issue creation uses GitHub CLI. Install `gh` and sign in first:
+
+```powershell
+gh auth login
+```
+
+To send the issue somewhere else, pass `-IssueRepo`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\whatcable-windows-check.ps1 -Enable -CreateIssue -IssueRepo "owner/repo"
+```
+
+Issue bodies intentionally truncate long probe output so GitHub issues stay
+readable and within GitHub's issue size limit. If the issue body is still too
+large, the script reduces or omits raw probe output while keeping the summary.
+Use `-JsonOut` at the same time if you want to keep the full local report.
+
+If issue creation fails after `-CreateIssue` was requested, the checker exits
+with code `3` so automated collection runs can tell that no issue was created.
 
 ## Why This Exists
 

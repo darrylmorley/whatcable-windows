@@ -19,7 +19,9 @@ param(
     [switch]$NoRestart,
     [string]$UcsiControlPath,
     [int]$MaxConnectors = 8,
-    [string]$JsonOut
+    [string]$JsonOut,
+    [switch]$CreateIssue,
+    [string]$IssueRepo = "darrylmorley/whatcable-windows"
 )
 
 Set-StrictMode -Version Latest
@@ -168,6 +170,60 @@ function Find-UcsiControl {
     return $null
 }
 
+function Find-GitHubCli {
+    $command = Get-Command "gh.exe" -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $command = Get-Command "gh" -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    return $null
+}
+
+function Get-SystemSummary {
+    try {
+        $computer = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+
+        return [pscustomobject]@{
+            manufacturer = $computer.Manufacturer
+            model = $computer.Model
+            osCaption = $os.Caption
+            osVersion = $os.Version
+            osBuildNumber = $os.BuildNumber
+        }
+    } catch {
+        return [pscustomobject]@{
+            manufacturer = $null
+            model = $null
+            osCaption = $null
+            osVersion = $null
+            osBuildNumber = $null
+        }
+    }
+}
+
+function Limit-Text {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MaxLength = 2000
+    )
+
+    if (-not $Text) {
+        return ""
+    }
+
+    if ($Text.Length -le $MaxLength) {
+        return $Text
+    }
+
+    return $Text.Substring(0, $MaxLength) + "`n... truncated ..."
+}
+
 function Format-UcsiCommand {
     param([UInt64]$Command)
     return $Command.ToString("X")
@@ -293,12 +349,185 @@ function Get-CompatibilityResult {
     return "Unsupported"
 }
 
+function New-IssueProbeSummary {
+    param([object[]]$Probes)
+
+    if ($Probes.Count -eq 0) {
+        return "_No UCSIControl probes were run._"
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("| Probe | Command | Exit | Result |")
+    $lines.Add("| --- | --- | ---: | --- |")
+
+    foreach ($probe in $Probes) {
+        $state = if ($probe.ok) { "OK" } else { "FAIL" }
+        $name = [string]$probe.name
+        $command = "Send $($probe.argument) $($probe.command)"
+        $lines.Add("| ``$name`` | ``$command`` | $($probe.exitCode) | $state |")
+    }
+
+    return ($lines -join "`n")
+}
+
+function New-IssueReport {
+    param(
+        [object]$Report,
+        [int]$ProbeOutputLimit
+    )
+
+    return [pscustomobject]@{
+        tool = $Report.tool
+        schemaVersion = $Report.schemaVersion
+        generatedAt = $Report.generatedAt
+        compatibility = $Report.compatibility
+        isAdministrator = $Report.isAdministrator
+        maxConnectors = $Report.maxConnectors
+        system = $Report.system
+        ucsiControlPath = $Report.ucsiControlPath
+        devices = $Report.devices
+        restarts = $Report.restarts
+        probes = @($Report.probes | ForEach-Object {
+            $output = if ($ProbeOutputLimit -gt 0) {
+                Limit-Text -Text $_.output -MaxLength $ProbeOutputLimit
+            } else {
+                ""
+            }
+
+            [pscustomobject]@{
+                name = $_.name
+                argument = $_.argument
+                command = $_.command
+                exitCode = $_.exitCode
+                ok = $_.ok
+                output = $output
+            }
+        })
+    }
+}
+
+function New-IssueBodyText {
+    param(
+        [object]$Report,
+        [string]$ProbeSummary,
+        [string]$Json,
+        [string]$OutputNote
+    )
+
+    return @"
+## WhatCable Windows compatibility check
+
+**Result:** $($Report.compatibility)
+
+**Machine:** $($Report.system.manufacturer) $($Report.system.model)
+
+**Windows:** $($Report.system.osCaption) $($Report.system.osVersion) build $($Report.system.osBuildNumber)
+
+**Ran as administrator:** $($Report.isAdministrator)
+
+**UCSIControl:** $($Report.ucsiControlPath)
+
+### Probe summary
+
+$probeSummary
+
+### Diagnostic JSON
+
+$OutputNote
+
+If the script was run with -JsonOut, the local JSON file has the full report.
+
+~~~json
+$json
+~~~
+"@
+}
+
+function New-IssueBody {
+    param([object]$Report)
+
+    $probeSummary = New-IssueProbeSummary -Probes @($Report.probes)
+    $bodyLimit = 60000
+    $probeOutputLimits = @(2000, 500, 100, 0)
+
+    foreach ($probeOutputLimit in $probeOutputLimits) {
+        $issueReport = New-IssueReport -Report $Report -ProbeOutputLimit $probeOutputLimit
+        $json = $issueReport | ConvertTo-Json -Depth 8 -Compress
+        $outputNote = if ($probeOutputLimit -gt 0) {
+            "Probe output is capped at $probeOutputLimit characters per probe in this issue body to keep it within GitHub's issue size limit."
+        } else {
+            "Probe output is omitted from this issue body to keep it within GitHub's issue size limit."
+        }
+        $body = New-IssueBodyText -Report $Report -ProbeSummary $probeSummary -Json $json -OutputNote $outputNote
+
+        if ($body.Length -le $bodyLimit) {
+            return $body
+        }
+    }
+
+    $minimalReport = [pscustomobject]@{
+        tool = $Report.tool
+        schemaVersion = $Report.schemaVersion
+        generatedAt = $Report.generatedAt
+        compatibility = $Report.compatibility
+        isAdministrator = $Report.isAdministrator
+        maxConnectors = $Report.maxConnectors
+        system = $Report.system
+        ucsiControlPath = $Report.ucsiControlPath
+        devices = $Report.devices
+        restarts = $Report.restarts
+        probeCount = @($Report.probes).Count
+    }
+    $minimalJson = $minimalReport | ConvertTo-Json -Depth 8 -Compress
+    return New-IssueBodyText `
+        -Report $Report `
+        -ProbeSummary $probeSummary `
+        -Json $minimalJson `
+        -OutputNote "Probe detail is omitted from this issue body because the full report would exceed GitHub's issue size limit."
+}
+
+function New-GitHubIssue {
+    param(
+        [object]$Report,
+        [string]$Repo
+    )
+
+    $gh = Find-GitHubCli
+    if (-not $gh) {
+        throw "GitHub CLI was not found. Install gh, authenticate with 'gh auth login', then re-run with -CreateIssue."
+    }
+
+    $machine = "$($Report.system.manufacturer) $($Report.system.model)".Trim()
+    if (-not $machine) {
+        $machine = "Unknown Windows PC"
+    }
+
+    $title = "Windows check: $($Report.compatibility) on $machine"
+    $body = New-IssueBody -Report $Report
+    $bodyFile = [System.IO.Path]::GetTempFileName()
+
+    try {
+        Set-Content -LiteralPath $bodyFile -Value $body -Encoding UTF8
+        $output = & $gh issue create --repo $Repo --title $title --body-file $bodyFile 2>&1 | Out-String
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "gh issue create failed: $($output.Trim())"
+        }
+
+        return $output.Trim()
+    } finally {
+        Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $isAdmin = Test-IsAdministrator
+$system = Get-SystemSummary
 $deviceReports = New-Object System.Collections.Generic.List[object]
 $changedRegistry = $false
 $restartReports = New-Object System.Collections.Generic.List[object]
 $probes = @()
 $ucsiControl = $null
+$issueFailed = $false
 
 Write-Host "WhatCable Windows compatibility checker"
 Write-Host "Experimental. Run before buying WhatCable Windows Labs."
@@ -389,7 +618,7 @@ Write-Step "Finding UcsiControl.exe"
 try {
     $ucsiControl = Find-UcsiControl -ExplicitPath $UcsiControlPath
 } catch {
-    Write-Warning $_.Exception.Message
+    Write-Warning -Message ($_.Exception.Message)
 }
 
 if ($ucsiControl) {
@@ -415,6 +644,7 @@ $report = [pscustomobject]@{
     isAdministrator = $isAdmin
     maxConnectors = $MaxConnectors
     compatibility = $result
+    system = $system
     ucsiControlPath = $ucsiControl
     devices = @($deviceReports)
     restarts = @($restartReports)
@@ -438,6 +668,21 @@ if ($JsonOut) {
     $json = $report | ConvertTo-Json -Depth 8
     Set-Content -LiteralPath $JsonOut -Value $json -Encoding UTF8
     Write-Host "Wrote diagnostic JSON: $JsonOut"
+}
+
+if ($CreateIssue) {
+    Write-Step "Creating GitHub issue"
+    try {
+        $issueUrl = New-GitHubIssue -Report $report -Repo $IssueRepo
+        Write-Host "Created issue: $issueUrl"
+    } catch {
+        $issueFailed = $true
+        Write-Warning -Message ($_.Exception.Message)
+    }
+}
+
+if ($issueFailed) {
+    exit 3
 }
 
 if ($result -eq "Compatible") {
