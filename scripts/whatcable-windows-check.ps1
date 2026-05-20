@@ -236,6 +236,16 @@ function Format-UcsiCommand {
     return $Command.ToString("X")
 }
 
+function Get-UcsiCommandArgument {
+    param([UInt64]$Command)
+    return [int]($Command -shr 32)
+}
+
+function Get-UcsiCommandControl {
+    param([UInt64]$Command)
+    return [UInt64]($Command -band [UInt64]0xffffffff)
+}
+
 function New-ConnectorCommand {
     param(
         [int]$Connector,
@@ -314,7 +324,9 @@ function Invoke-UcsiProbes {
                 -Offset 0 `
                 -Bytes 28 `
                 -MessageType 4
-            $probes.Add((Invoke-UcsiControl -ToolPath $ToolPath -Name "CONNECTOR_$connector GET_PD_MESSAGE_IDENTITY_RECIPIENT_$recipient" -Argument 0 -Command $identityCommand))
+            $identityArgument = Get-UcsiCommandArgument -Command $identityCommand
+            $identityControl = Get-UcsiCommandControl -Command $identityCommand
+            $probes.Add((Invoke-UcsiControl -ToolPath $ToolPath -Name "CONNECTOR_$connector GET_PD_MESSAGE_IDENTITY_RECIPIENT_$recipient" -Argument $identityArgument -Command $identityControl))
         }
     }
 
